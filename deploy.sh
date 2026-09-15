@@ -24,15 +24,20 @@ if [ -z "$GH_USER" ] || [ -z "$REPO" ]; then
     exit 1
 fi
 
-# 检查是否在 git 仓库
+# 检查 / 兜底初始化 git
 if [ ! -d ".git" ]; then
-    echo "❌ 当前目录不是 git 仓库,请先在项目根目录执行 deploy.sh"
-    exit 1
+    echo "⚠️  当前目录不是 git 仓库,自动初始化..."
+    git init -b main
+    git config user.name "embedded-pm-bot"
+    git config user.email "bot@example.com"
+    git add .
+    git commit -m "feat: 初始化嵌入式 PM 每日早报项目"
+    echo "✅ git 仓库已自动初始化"
 fi
 
-# 检查是否已有提交
+# 检查是否有 commit
 if ! git rev-parse HEAD >/dev/null 2>&1; then
-    echo "❌ 仓库还没有任何 commit"
+    echo "❌ 仓库还没有任何 commit,请检查项目目录"
     exit 1
 fi
 
