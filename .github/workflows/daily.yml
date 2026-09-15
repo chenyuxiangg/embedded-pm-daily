@@ -1,0 +1,58 @@
+name: Embedded PM Daily
+
+on:
+  # 定时:北京时间 早 8 点(UTC 0 点)
+  schedule:
+    - cron: "0 0 * * *"
+  # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      lookback_hours:
+        description: "抓取多少小时内文章(默认 24)"
+        required: false
+        default: "24"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run daily push
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '24' }}
+        run: |
+          python -m src.main
+
+      - name: Commit seen.json
+        # 保留去重记录,避免重复推送
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/seen.json
+          if git diff --cached --quiet; then
+            echo "seen.json 无变化,跳过提交"
+          else
+            git commit -m "chore: update seen.json $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            git push
+          fi
