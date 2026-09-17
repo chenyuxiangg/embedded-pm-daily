@@ -4,10 +4,14 @@
 - 英文文章:用 LLM 写一段中文摘要(2-3 句),PM 视角,聚焦对产品决策的价值
 - 中文文章:用 LLM 改写为更精炼的中文摘要
 - 失败时降级到 raw_text 截取
+
+针对 MiniMax-M 系列做了适配:
+- M3 是推理模型,推荐 temperature=1.0
+- 用 max_completion_tokens(M3 推荐,旧的 max_tokens 仍兼容)
+- 对 M3 加 reasoning_split 让 thinking 和正文分开返回
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import List, Optional
 
@@ -40,6 +44,19 @@ Requirements:
 """
 
 
+def _is_reasoning_model(model: str) -> bool:
+    """M3 / M2 系列是推理模型,需要特殊处理。"""
+    m = (model or "").lower()
+    return any(tag in m for tag in ("-m3", "-m2", "reasoning", "o1", "o3"))
+
+
+def _default_temperature(model: str) -> float:
+    """按模型推荐 temperature。"""
+    if _is_reasoning_model(model):
+        return 1.0  # M3 / M2 / M2.x 推荐 0.8-1.0
+    return 0.3  # 通用摘要场景
+
+
 class Summarizer:
     def __init__(self):
         self.client = OpenAI(
@@ -47,19 +64,32 @@ class Summarizer:
             base_url=CONFIG.llm_api_base,
         )
         self.model = CONFIG.llm_model
+        self.temperature = _default_temperature(self.model)
+        self.is_reasoning = _is_reasoning_model(self.model)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=15))
     def _call_llm(self, sys: str, user: str, max_tokens: int = 220) -> str:
-        resp = self.client.chat.completions.create(
+        kwargs = dict(
             model=self.model,
             messages=[
                 {"role": "system", "content": sys},
                 {"role": "user", "content": user},
             ],
-            temperature=0.3,
-            max_tokens=max_tokens,
+            temperature=self.temperature,
         )
-        return (resp.choices[0].message.content or "").strip()
+        # M3 / MiniMax-M 系列推荐新参数
+        kwargs["max_completion_tokens"] = max_tokens
+        # 旧的 max_tokens 也带上,某些服务端只认这个
+        kwargs["max_tokens"] = max_tokens
+        # 推理模型需要这个才能拿到 thinking 和正文
+        if self.is_reasoning:
+            kwargs["extra_body"] = {"reasoning_split": True}
+
+        logger.debug("LLM 调用 model=%s temp=%.1f reasoning=%s",
+                     self.model, self.temperature, self.is_reasoning)
+        resp = self.client.chat.completions.create(**kwargs)
+        msg = resp.choices[0].message
+        return (msg.content or "").strip()
 
     def summarize_one(self, article: Article) -> str:
         """生成单篇文章摘要。失败时降级。"""
@@ -93,7 +123,8 @@ class Summarizer:
     def summarize_batch(self, articles: List[Article], max_n: Optional[int] = None) -> List[Article]:
         """批量摘要,带数量限制(防止爆 token / 烧钱)。"""
         target = articles[: max_n] if max_n else articles
-        logger.info("开始摘要 %d 篇文章", len(target))
+        logger.info("开始摘要 %d 篇文章 (model=%s, reasoning=%s)",
+                    len(target), self.model, self.is_reasoning)
         for i, a in enumerate(target, 1):
             if a.summary:
                 continue

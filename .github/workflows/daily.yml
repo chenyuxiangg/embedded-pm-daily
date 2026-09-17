@@ -15,7 +15,7 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -32,6 +32,74 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ====== 调试:LLM 连通性 + 网络诊断 ======
+      - name: 调试 - 检查 LLM 配置
+        env:
+          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          echo "========== 配置检查 =========="
+          echo "LLM_API_BASE = $${LLM_API_BASE}"
+          echo "LLM_MODEL    = $${LLM_MODEL}"
+          echo "LLM_API_KEY  = $${LLM_API_KEY:0:8}... (前8位,保护密钥)"
+          echo ""
+          echo "========== 网络诊断 =========="
+          # DNS 解析
+          echo "DNS 解析 $${LLM_API_BASE#https://} :"
+          host $${LLM_API_BASE#https://} 2>&1 || echo "(host 命令不可用)"
+          nslookup $${LLM_API_BASE#https://} 2>&1 | head -10 || echo "(nslookup 失败)"
+          echo ""
+          # ping
+          echo "Ping $${LLM_API_BASE#https://}:"
+          ping -c 2 -W 2 $${LLM_API_BASE#https://} 2>&1 | head -10 || echo "(ping 失败)"
+          echo ""
+          # 出口 IP
+          echo "出口 IP:"
+          curl -s ifconfig.me || echo "(获取失败)"
+          echo ""
+
+      - name: 调试 - 直接 curl LLM
+        env:
+          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          echo "========== curl M2 (应该 200) =========="
+          curl -s -w "\nHTTP_CODE: %{http_code}\nTIME: %{time_total}s\n" \
+            -X POST "$${LLM_API_BASE}/chat/completions" \
+            -H "Authorization: Bearer $${LLM_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"$${LLM_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"说hi\"}],\"max_tokens\":20}" \
+            --max-time 30
+          echo ""
+          echo "========== curl M3 (看是否支持) =========="
+          curl -s -w "\nHTTP_CODE: %{http_code}\nTIME: %{time_total}s\n" \
+            -X POST "$${LLM_API_BASE}/chat/completions" \
+            -H "Authorization: Bearer $${LLM_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"MiniMax-M3","messages":[{"role":"user","content":"说hi"}],"max_tokens":20}' \
+            --max-time 30
+        continue-on-error: true
+
+      - name: 调试 - 测试 DeepSeek 备选
+        env:
+          DEEPSEEK_KEY: ${{ secrets.DEEPSEEK_KEY }}
+        run: |
+          if [ -z "$${DEEPSEEK_KEY}" ] || [ "$${DEEPSEEK_KEY}" = "your_key" ]; then
+            echo "未配置 DEEPSEEK_KEY,跳过 DeepSeek 测试"
+          else
+            echo "========== 测试 DeepSeek 备选 =========="
+            curl -s -w "\nHTTP_CODE: %{http_code}\nTIME: %{time_total}s\n" \
+              -X POST "https://api.deepseek.com/v1/chat/completions" \
+              -H "Authorization: Bearer $${DEEPSEEK_KEY}" \
+              -H "Content-Type: application/json" \
+              -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"说hi"}],"max_tokens":20}' \
+              --max-time 30
+          fi
+        continue-on-error: true
+
+      # ====== 主流程 ======
       - name: Run daily push
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
