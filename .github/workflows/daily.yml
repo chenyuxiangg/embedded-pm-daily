@@ -11,11 +11,19 @@ on:
         description: "抓取多少小时内文章(默认 24)"
         required: false
         default: "24"
+      debug:
+        description: "调试模式(执行诊断步骤,可能烧 token,默认 false)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -32,81 +40,88 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ====== 调试:真实诊断 ======
-      - name: 调试 - 完整诊断
+      # ====== LLM 连通性测试(日常 cron 必跑,失败则中止整个 job)======
+      # 这是推送前的硬性前置:不让坏 LLM 配进到主流程里空转+token 浪费
+      - name: LLM 连通性测试
+        id: llm_check
         env:
           LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: |
-          echo "========== 1. 真实配置(base64 编码避开 mask)=========="
-          # 把 secret 写入文件,绕过日志 mask
-          printf '%s' "${LLM_API_BASE}" > /tmp/.b
-          printf '%s' "${LLM_MODEL}" > /tmp/.m
-          printf '%s' "${LLM_API_KEY:0:12}" > /tmp/.k
-          ls -la /tmp/.b /tmp/.m /tmp/.k
+          echo "测试 LLM 连通性: ${LLM_MODEL}"
+          # 只 echo 长度+前 4 位哈希,不泄露 key 明文
+          KEY_PREFIX=$(printf '%s' "${LLM_API_KEY}" | cut -c1-4)
+          echo "API_KEY 前缀(哈希安全): ${KEY_PREFIX}***"
           echo ""
-          echo "Base64 编码(把这段贴出来,我帮你解码):"
-          echo "  LLM_API_BASE b64: $(base64 -w0 /tmp/.b)"
-          echo "  LLM_MODEL    b64: $(base64 -w0 /tmp/.m)"
-          echo "  LLM_API_KEY prefix: $(cat /tmp/.k)"
-          echo ""
-          # 清理敏感文件
-          shred -u /tmp/.b /tmp/.m /tmp/.k 2>/dev/null || rm -f /tmp/.b /tmp/.m /tmp/.k
-
-          echo "========== 2. URL 解析(host 只解主机名部分)=========="
-          # 提取协议 + 主机名(去掉路径)
-          BASE="${LLM_API_BASE}"
-          if [[ "${BASE}" =~ ^(https?://[^/]+)(/.*)?$ ]]; then
-            ORIGIN="${BASH_REMATCH[1]}"
-            PATH_PART="${BASH_REMATCH[2]}"
-          else
-            ORIGIN="${BASE}"
-            PATH_PART=""
-          fi
-          echo "Origin(主机): ${ORIGIN}"
-          echo "Path(挂载): ${PATH_PART}"
-          echo ""
-          echo "DNS 解析 ${ORIGIN#https://}:"
-          HOST="${ORIGIN#https://}"
-          HOST="${HOST#http://}"
-          nslookup "${HOST}" 2>&1 | tail -8
-          echo ""
-          echo "Ping ${HOST}:"
-          ping -c 2 -W 2 "${HOST}" 2>&1 | head -8
-          echo ""
-          echo "出口 IP:"
-          curl -s --max-time 10 ifconfig.me || echo "(获取失败)"
-          echo ""
-
-      - name: 调试 - curl LLM
-        env:
-          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
-        run: |
-          echo "========== 3. 实际 curl 测试 =========="
-          echo "请求 URL: ${LLM_API_BASE}/chat/completions"
-          echo "请求体: {\"model\":\"${LLM_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"说hi\"}],\"max_tokens\":20}"
-          echo ""
-          echo "--- 测试 1: 当前配置的模型 ---"
-          curl -sS -w "\n\nHTTP_CODE: %{http_code}\nTIME: %{time_total}s\n" \
-            -X POST "${LLM_API_BASE}/chat/completions" \
+          RESP=$(curl -sS -w "\n%{http_code}" -X POST "${LLM_API_BASE}/chat/completions" \
             -H "Authorization: Bearer ${LLM_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "{\"model\":\"${LLM_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"说hi\"}],\"max_tokens\":20}" \
-            --max-time 30
-          echo ""
-          echo "--- 测试 2: 强制用 MiniMax-M2 ---"
-          curl -sS -w "\n\nHTTP_CODE: %{http_code}\nTIME: %{time_total}s\n" \
-            -X POST "${LLM_API_BASE}/chat/completions" \
-            -H "Authorization: Bearer ${LLM_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d '{"model":"MiniMax-M2","messages":[{"role":"user","content":"说hi"}],"max_tokens":20}' \
-            --max-time 30
-        continue-on-error: true
+            --max-time 30)
+          HTTP_CODE=$(echo "${RESP}" | tail -n1)
+          BODY=$(echo "${RESP}" | head -n-1)
+          echo "HTTP 状态: ${HTTP_CODE}"
+          echo "响应体: ${BODY}"
+          if [ "${HTTP_CODE}" != "200" ]; then
+            echo "❌ LLM 连通性测试失败,中止整个 job"
+            exit 1
+          fi
+          # 校验响应里含 'content' 字段(说明能拿到正文,不是错误页)
+          if ! echo "${BODY}" | grep -q '"content"'; then
+            echo "❌ 响应不包含 content 字段,LLM 模型名可能不对或服务端不兼容"
+            exit 1
+          fi
+          echo "✅ LLM 连通性测试通过"
 
-      - name: 调试 - 测试 DeepSeek 备选
+      # ====== 主流程(LLM 通才走)======
+      - name: Run daily push
+        needs: llm_check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '24' }}
+        run: |
+          python -m src.main
+
+      - name: Commit seen.json
+        needs: llm_check
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/seen.json
+          if git diff --cached --quiet; then
+            echo "seen.json 无变化,跳过提交"
+          else
+            git commit -m "chore: update seen.json $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            git push
+          fi
+
+      # ====== 调试步骤:只在手动 Run workflow 时跑,日常 cron 不跑 ======
+      - name: 调试 - DNS / 网络诊断(仅 debug)
+        if: ${{ github.event.inputs.debug == 'true' }}
+        env:
+          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
+        run: |
+          BASE="${LLM_API_BASE}"
+          if [[ "${BASE}" =~ ^(https?://[^/]+)(/.*)?$ ]]; then
+            ORIGIN="${BASH_REMATCH[1]}"
+          else
+            ORIGIN="${BASE}"
+          fi
+          HOST="${ORIGIN#https://}"
+          HOST="${HOST#http://}"
+          echo "DNS 解析 ${HOST}:"
+          nslookup "${HOST}" 2>&1 | tail -8
+          echo "出口 IP:"
+          curl -s --max-time 10 ifconfig.me || echo "(获取失败)"
+
+      - name: 调试 - DeepSeek 备选连通(仅 debug)
+        if: ${{ github.event.inputs.debug == 'true' }}
         env:
           DEEPSEEK_KEY: ${{ secrets.DEEPSEEK_KEY }}
         run: |
@@ -122,28 +137,3 @@ jobs:
               --max-time 30
           fi
         continue-on-error: true
-
-      # ====== 主流程 ======
-      - name: Run daily push
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
-          LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '24' }}
-        run: |
-          python -m src.main
-
-      - name: Commit seen.json
-        continue-on-error: true
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/seen.json
-          if git diff --cached --quiet; then
-            echo "seen.json 无变化,跳过提交"
-          else
-            git commit -m "chore: update seen.json $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-            git push
-          fi

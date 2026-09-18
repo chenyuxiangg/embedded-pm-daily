@@ -66,14 +66,14 @@ def main() -> int:
     today = datetime.now().strftime("%Y-%m-%d")
     batches = [[today, fresh]]
 
-    # 5. 推送
+    # 5. 推送(失败时不 mark_seen,避免下次被去重永远收不到)
     try:
         send_to_telegram(batches)
     except Exception as e:
         logger.exception("推送失败: %s", e)
         return 3
 
-    # 6. 标记已推送
+    # 6. 标记已推送(只在推送成功后才走)
     store.mark_seen(fresh)
     removed = store.cleanup()
     logger.info("清理过期 %d 条", removed)

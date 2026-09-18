@@ -49,31 +49,61 @@ SOURCE_PLAN: list[tuple[Type[BaseSource], Type[BaseSource] | None]] = [
 
 
 def fetch_with_fallback(primary: Type[BaseSource], secondary: Type[BaseSource] | None,
-                         lookback_hours: int, max_per_source: int) -> list:
-    """优先用 RSS,失败时 fallback 到 HTML。返回 article 列表。"""
+                        lookback_hours: int, max_per_source: int) -> list:
+    """优先 RSS,不够 max_per_source 时用 HTML 补齐(而非完全替换)。
+
+    设计:
+    - RSS 全挂: 用 HTML 全部
+    - RSS 拿到的 < max_per_source: 用 HTML 补到 max_per_source
+    - RSS 已经够了: 不再调 HTML(节省时间/避免重复抓)
+    """
     inst = primary(lookback_hours=lookback_hours, max_per_source=max_per_source)
     try:
-        items = inst.fetch()
+        primary_items = inst.fetch()
     except Exception as e:
         logger.warning("[%s] 抓取异常: %s", primary.__name__, e)
-        items = []
+        primary_items = []
 
-    if items:
-        logger.info("[%s] RSS 抓到 %d 篇", primary.__name__, len(items))
-        return items
+    if primary_items:
+        logger.info("[%s] RSS 抓到 %d 篇", primary.__name__, len(primary_items))
 
+    # RSS 全挂或不够,且没有兜底,返回现有
     if secondary is None:
-        return []
+        return primary_items[:max_per_source]
+
+    need_html = len(primary_items) < max_per_source
+    if not need_html and primary_items:
+        # RSS 已经够满
+        return primary_items[:max_per_source]
 
     try:
         fb = secondary(lookback_hours=lookback_hours, max_per_source=max_per_source)
-        items = fb.fetch()
-        if items:
-            logger.info("[%s] HTML 兜底抓到 %d 篇", secondary.__name__, len(items))
+        html_items = fb.fetch() or []
     except Exception as e:
         logger.warning("[%s] HTML 兜底失败: %s", secondary.__name__, e)
+        html_items = []
 
-    return items or []
+    if not primary_items:
+        if html_items:
+            logger.info("[%s] HTML 兜底抓到 %d 篇(RSS 全挂)", secondary.__name__, len(html_items))
+        return html_items[:max_per_source]
+
+    # RSS 不够 → HTML 补齐(URL 去重,避免 RSS 和 HTML 抓到同一篇)
+    existing_urls = {a.url.strip().lower() for a in primary_items}
+    merged = list(primary_items)
+    added = 0
+    for a in html_items:
+        if len(merged) >= max_per_source:
+            break
+        if a.url.strip().lower() in existing_urls:
+            continue
+        merged.append(a)
+        existing_urls.add(a.url.strip().lower())
+        added += 1
+    if added:
+        logger.info("[%s] HTML 补齐 %d 篇(合并去重后共 %d)",
+                    secondary.__name__, added, len(merged))
+    return merged
 
 
 def build_sources(lookback_hours: int, max_per_source: int):

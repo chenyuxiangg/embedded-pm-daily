@@ -172,33 +172,46 @@ class IFixitFeed(BaseSource):
 
 
 class KickstarterTech(BaseSource):
-    """Kickstarter 技术类热门(从网页解析)。"""
+    """Kickstarter 技术类热门(从网页解析)。
 
+    category_id=16 对应 Kickstarter 的 Technology 分类。
+    这里抓首页 Discover 列表的 HTML,再过滤出 /projects/<slug> 格式的真实项目卡。
+    """
     name = "Kickstarter"
     category = "趋势"
     language = "en"
 
     URL = "https://www.kickstarter.com/discover/advanced?category_id=16&sort=end_date&seed=2855338&page=1"
+    # 项目卡 URL 形如: /projects/<creator>/<slug>
+    URL_PATTERNS = (r"/projects/[^/]+/[^/?#]+",)
 
     def fetch(self) -> List[Article]:
-        # Kickstarter 没有公开 RSS,这里用其 Discover 页 + 关键词过滤
-        # 实际项目卡(每个项目)由它们的 discover API 输出
-        # 简化:抓首页 HTML 提取标题+链接
         try:
             html = self._http_get(self.URL)
         except Exception:
             return []
         from bs4 import BeautifulSoup
+        import re
 
         soup = BeautifulSoup(html, "lxml")
         articles: List[Article] = []
+        seen: set[str] = set()
+        # 只匹配符合 /projects/creator/slug 模式的项目卡,过滤掉 Discover 导航 / Explore 链接
+        proj_re = re.compile(r"/projects/[^/]+/[^/?#]+")
         for a in soup.select("a[href*='/projects/']"):
-            href = a.get("href", "")
+            href = str(a.get("href", ""))
+            if not proj_re.search(href):
+                continue
             title = a.get_text(" ", strip=True)
-            if not title or len(title) < 4 or "/projects/" not in href:
+            if not title or len(title) < 6 or len(title) > 200:
                 continue
             if not href.startswith("http"):
                 href = "https://www.kickstarter.com" + href
+            # 去重(同项目可能被多个区块引用)
+            key = href.split("?")[0].rstrip("/").lower()
+            if key in seen:
+                continue
+            seen.add(key)
             articles.append(
                 Article(title=title[:120], url=href, source=self.name, category=self.category, language=self.language)
             )
