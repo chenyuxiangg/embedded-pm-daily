@@ -102,17 +102,27 @@ jobs:
           cd "$TMP"
           git init -q -b main
           git remote add origin "https://x-access-token:${STATE_REPO_TOKEN}@github.com/${STATE_REPO_OWNER}/${STATE_REPO_NAME}.git"
+          # 确保 data/ 目录存在
+          mkdir -p "${GITHUB_WORKSPACE}/data"
           # 拉 main 分支的 seen.json,容忍首次(远端空仓/文件不存在)
           if git fetch --depth=1 origin main 2>/dev/null; then
-            # 把 seen.json 拷到主 checkout 的 data/ 目录
-            git show origin/main:seen.json > "${GITHUB_WORKSPACE}/data/seen.json" 2>/dev/null || \
+            # 用 git show ... | cat 而不是 > 重定向,避免覆盖写空
+            if CONTENT=$(git show origin/main:seen.json 2>/dev/null); then
+              printf '%s' "$CONTENT" > "${GITHUB_WORKSPACE}/data/seen.json"
+              echo "✅ 已下载 seen.json ($(wc -c < "${GITHUB_WORKSPACE}/data/seen.json") 字节)"
+            else
               echo "首次拉取,远端无 seen.json(视为空去重状态)"
+              # 关键:不能 touch 一个空文件,会让 DedupStore 读空 dict 当作"没历史"
+              rm -f "${GITHUB_WORKSPACE}/data/seen.json"
+            fi
           else
             echo "首次拉取,远端空仓(视为空去重状态)"
+            # 同样不能留空文件 - 删掉让 DedupStore 走"无历史文件"路径
+            rm -f "${GITHUB_WORKSPACE}/data/seen.json"
           fi
           # 切回主 checkout 继续后续步骤
           cd "${GITHUB_WORKSPACE}"
-          ls -la data/seen.json 2>/dev/null || echo "data/seen.json 不存在(将在主流程后生成)"
+          ls -la data/seen.json 2>/dev/null || echo "data/seen.json 不存在(本次 run 无跨 run 去重)"
 
       - name: Run daily push
         env:
