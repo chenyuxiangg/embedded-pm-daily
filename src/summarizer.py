@@ -121,7 +121,13 @@ class Summarizer:
                 )
             return self._call_llm(sys, user, max_tokens=220)
         except Exception as e:
-            logger.warning("摘要失败[%s]: %s | %s", article.source, article.title[:50], e)
+            # 诊断:打印异常类型 + traceback 头几行,方便排错
+            import traceback
+            tb_lines = traceback.format_exc().splitlines()
+            tb_head = "\n    ".join(tb_lines[-4:])  # 最后4行
+            logger.warning("摘要失败[%s]: %s | %s: %s\n    %s",
+                           article.source, article.title[:50],
+                           type(e).__name__, e, tb_head)
             # fallback: 返回空字符串而不是 raw_text(英文 raw_text 会导致推送英文)
             # 空字符串会让 formatter 跳过该文章
             return ""
