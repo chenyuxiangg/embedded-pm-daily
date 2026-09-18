@@ -14,8 +14,7 @@ class Article:
     source: str  # 来源名,如 "EE Times"
     category: str  # 分类: 政策/产业/技术/拆解/趋势/用户
     published: Optional[datetime] = None
-    summary: Optional[str] = None  # AI 摘要(2-3 句)
-    summary_zh: Optional[str] = None  # 中文翻译/改写
+    summary: Optional[str] = None  # AI 摘要(2-3 句中文,英文源也会被翻译/改写)
     raw_text: Optional[str] = None  # 原文(供 AI 摘要用)
     language: str = "en"  # en / zh
 
@@ -31,7 +30,6 @@ class Article:
             "category": self.category,
             "published": self.published.isoformat() if self.published else None,
             "summary": self.summary,
-            "summary_zh": self.summary_zh,
             "language": self.language,
         }
 
@@ -50,6 +48,5 @@ class Article:
             category=d.get("category", ""),
             published=pub,
             summary=d.get("summary"),
-            summary_zh=d.get("summary_zh"),
             language=d.get("language", "en"),
         )
