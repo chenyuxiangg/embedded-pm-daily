@@ -62,9 +62,20 @@ def main() -> int:
     summarizer = Summarizer()
     summarizer.summarize_batch(fresh, max_n=CONFIG.llm_max_articles)
 
+    # 检查:LLM 失败的文章统计,方便排错
+    failed = [a for a in fresh if not (a.summary and a.summary.strip())]
+    if failed:
+        logger.warning("LLM 摘要失败 %d 篇, 跳过推送: %s",
+                       len(failed),
+                       [a.title[:30] for a in failed[:5]])
+    fresh_with_summary = [a for a in fresh if a.summary and a.summary.strip()]
+    if not fresh_with_summary:
+        logger.warning("所有文章摘要都失败,跳过推送")
+        return 0
+
     # 4. 按"推送批次"分组(默认一天一批)
     today = datetime.now().strftime("%Y-%m-%d")
-    batches = [[today, fresh]]
+    batches = [[today, fresh_with_summary]]
 
     # 5. 推送(失败时不 mark_seen,避免下次被去重永远收不到)
     try:
@@ -73,8 +84,8 @@ def main() -> int:
         logger.exception("推送失败: %s", e)
         return 3
 
-    # 6. 标记已推送(只在推送成功后才走)
-    store.mark_seen(fresh)
+    # 6. 标记已推送(只在推送成功后才走, 且只标记实际推过的)
+    store.mark_seen(fresh_with_summary)
     removed = store.cleanup()
     logger.info("清理过期 %d 条", removed)
 

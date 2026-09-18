@@ -27,20 +27,24 @@ SYSTEM_PROMPT_ZH = """你是嵌入式消费电子行业的产品经理助手。�
 
 要求:
 1. 2-3 句话,不超过 120 字
-2. 直接讲"这意味着什么"或"PM 该关注什么"
+2. **不要逐句翻译原文**——要提炼核心要点,讲"这意味着什么"或"PM 该关注什么"
 3. 优先指出: 技术/产品变化、产业链动向、价格/供应变化、用户痛点信号
-4. 避免空话,不要"近日""据悉"
+4. 避免空话,不要"近日""据悉""据悉报道"等废话
 5. 不要"标题党"风格,实事求是
+6. 如果原文是英文标题或英文人名/产品名,保留英文(不要强行翻译 iPhone 这种品牌名)
+7. 直接输出中文摘要,不要"以下是摘要"等废话前缀
 """
 
 SYSTEM_PROMPT_EN = """You are an assistant for a product manager in the embedded consumer electronics industry.
 Your task: read the article and produce a Chinese summary.
 
-Requirements:
+Strict requirements:
 1. 2-3 sentences, no more than 120 Chinese characters
-2. Focus on product/PM implications: technology shifts, supply chain, user pain points, pricing
-3. Be concrete, avoid "据报道" / "近日" filler phrases
-4. Output ONLY the Chinese summary, no preamble
+2. **Do NOT translate the article sentence by sentence.** Extract the key point, focus on what a PM should know.
+3. Focus on: technology/product shifts, supply chain, user pain points, pricing changes
+4. Be concrete, avoid "据报道" / "近日" / "据悉" filler phrases
+5. Keep English brand names and product names in English (e.g. iPhone, Meta Portal, Hackaday, ESP32)
+6. Output ONLY the Chinese summary, no preamble, no English translation, no "以下是摘要"
 """
 
 
@@ -118,7 +122,9 @@ class Summarizer:
             return self._call_llm(sys, user, max_tokens=220)
         except Exception as e:
             logger.warning("摘要失败[%s]: %s | %s", article.source, article.title[:50], e)
-            return text[:140] + ("…" if len(text) > 140 else "")
+            # fallback: 返回空字符串而不是 raw_text(英文 raw_text 会导致推送英文)
+            # 空字符串会让 formatter 跳过该文章
+            return ""
 
     def summarize_batch(self, articles: List[Article], max_n: Optional[int] = None) -> List[Article]:
         """批量摘要,带数量限制(防止爆 token / 烧钱)。"""
@@ -131,8 +137,5 @@ class Summarizer:
             a.summary = self.summarize_one(a)
             if i % 10 == 0:
                 logger.info("已摘要 %d/%d", i, len(target))
-        # 没摘要到的文章用 raw_text 兜底
-        for a in target:
-            if not a.summary and a.raw_text:
-                a.summary = a.raw_text[:140] + ("…" if len(a.raw_text) > 140 else "")
+        # 没摘要到的文章跳过(LLM 失败就不推送,避免泄露英文 raw_text)
         return target

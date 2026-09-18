@@ -11,6 +11,14 @@ on:
         description: "抓取多少小时内文章(默认 24)"
         required: false
         default: "24"
+      max_per_source:
+        description: "每个源最多取多少篇(默认 8,设小可减少 token 消耗)"
+        required: false
+        default: "8"
+      llm_max_articles:
+        description: "单次最多摘要多少篇(防爆 token,默认 80)"
+        required: false
+        default: "80"
       debug:
         description: "调试模式(执行诊断步骤,可能烧 token,默认 false)"
         required: false
@@ -110,6 +118,8 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
           LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '24' }}
+          MAX_PER_SOURCE: ${{ github.event.inputs.max_per_source || '8' }}
+          LLM_MAX_ARTICLES: ${{ github.event.inputs.llm_max_articles || '80' }}
         run: |
           python -m src.main
 

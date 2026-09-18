@@ -81,7 +81,7 @@ class BaseSource(ABC):
                 continue
             # 摘要
             summary = getattr(entry, "summary", "") or getattr(entry, "description", "")
-            summary = BeautifulSoup(summary, "html.parser").get_text(" ", strip=True)[:1000]
+            summary = BeautifulSoup(summary, "html.parser").get_text(" ", strip=True)[:3000]
 
             articles.append(
                 Article(

@@ -62,7 +62,13 @@ def format_daily(articles: List[Article], date_str: str) -> str:
 
     设计:按 category 分组,每段标题 + N 个条目。
     若总长度超过 3500 字符,拆成多条。
+
+    跳过空 summary 的文章(LLM 失败的文章不推送,避免泄露 raw_text)。
     """
+    # 过滤:只保留有 summary 的文章
+    articles = [a for a in articles if a.summary and a.summary.strip()]
+    if not articles:
+        return ""
     # 分组
     by_cat: dict[str, list[Article]] = defaultdict(list)
     for a in articles:
