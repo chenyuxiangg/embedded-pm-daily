@@ -76,7 +76,6 @@ jobs:
 
       # ====== 主流程(LLM 通才走)======
       - name: Run daily push
-        needs: llm_check
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -88,8 +87,7 @@ jobs:
           python -m src.main
 
       - name: Commit seen.json
-        needs: llm_check
-        continue-on-error: true
+        if: success()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
