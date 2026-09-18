@@ -24,8 +24,6 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: write  # 允许 Commit seen.json 步骤 push 回仓库
 
     steps:
       - name: Checkout
@@ -87,19 +85,6 @@ jobs:
           LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '24' }}
         run: |
           python -m src.main
-
-      - name: Commit seen.json
-        if: success()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/seen.json
-          if git diff --cached --quiet; then
-            echo "seen.json 无变化,跳过提交"
-          else
-            git commit -m "chore: update seen.json $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-            git push
-          fi
 
       # ====== 调试步骤:只在手动 Run workflow 时跑,日常 cron 不跑 ======
       - name: 调试 - DNS / 网络诊断(仅 debug)
