@@ -11,6 +11,9 @@ venv/
 .vscode/
 .DS_Store
 
-# 数据
-data/seen.json
+# 日志
 *.log
+
+# 注意:data/seen.json 不再 ignore
+# 这是状态文件,需要 commit 到仓库,这样 Actions 跨 run 共享去重数据
+# (避免周末 + 工作日多次跑重复推送)
