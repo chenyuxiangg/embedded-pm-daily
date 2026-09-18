@@ -20,6 +20,10 @@ on:
           - "false"
           - "true"
 
+# ====== 仓库级变量(去仓库 Settings → Variables → Actions 添加)======
+# STATE_REPO_OWNER: state 仓的所有者用户名
+# STATE_REPO_NAME: state 仓的仓库名
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -75,6 +79,29 @@ jobs:
           echo "✅ LLM 连通性测试通过"
 
       # ====== 主流程(LLM 通才走)======
+      - name: Download seen.json from state repo
+        env:
+          STATE_REPO_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
+          STATE_REPO_OWNER: ${{ vars.STATE_REPO_OWNER }}
+          STATE_REPO_NAME: ${{ vars.STATE_REPO_NAME }}
+        run: |
+          if [ -z "${STATE_REPO_TOKEN}" ]; then
+            echo "⚠️ STATE_REPO_TOKEN 未配置,跳过下载(首次运行或未启用跨 run 去重)"
+            exit 0
+          fi
+          # 从独立 state 仓拉 seen.json(只读,只取 seen.json)
+          # 用临时目录避免污染主 checkout
+          mkdir -p /tmp/state-pull
+          cd /tmp/state-pull
+          git init -q -b main
+          git remote add origin "https://x-access-token:${STATE_REPO_TOKEN}@github.com/${STATE_REPO_OWNER}/${STATE_REPO_NAME}.git"
+          # 拉 main 分支的 seen.json(不存在会报错,容忍首次)
+          git fetch --depth=1 origin main 2>/dev/null && \
+            (git show origin/main:seen.json > /home/zyzs/code/embedded-pm-daily/data/seen.json 2>/dev/null || echo "首次拉取,seen.json 不存在") || \
+            echo "首次拉取,远端空仓"
+          cd /home/zyzs/code/embedded-pm-daily
+          ls -la data/seen.json 2>/dev/null || echo "data/seen.json 不存在(将在主流程后生成)"
+
       - name: Run daily push
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -85,6 +112,43 @@ jobs:
           LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '24' }}
         run: |
           python -m src.main
+
+      # ====== 上传 seen.json 到独立 state 仓(跨 run 去重)======
+      - name: Upload seen.json to state repo
+        if: success()
+        env:
+          STATE_REPO_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
+          STATE_REPO_OWNER: ${{ vars.STATE_REPO_OWNER }}
+          STATE_REPO_NAME: ${{ vars.STATE_REPO_NAME }}
+        run: |
+          if [ -z "${STATE_REPO_TOKEN}" ]; then
+            echo "⚠️ STATE_REPO_TOKEN 未配置,跳过上传(本次 seen.json 不会跨 run 共享)"
+            exit 0
+          fi
+          if [ ! -f "data/seen.json" ]; then
+            echo "⚠️ data/seen.json 不存在(主流程可能没产生),跳过上传"
+            exit 0
+          fi
+          # 在临时目录 clone + 替换 seen.json + commit + push
+          TMP=$(mktemp -d)
+          cd "$TMP"
+          git init -q -b main
+          git remote add origin "https://x-access-token:${STATE_REPO_TOKEN}@github.com/${STATE_REPO_OWNER}/${STATE_REPO_NAME}.git"
+          git fetch --depth=1 origin main 2>/dev/null || echo "首次上传,远端空仓"
+          git checkout -b main origin/main 2>/dev/null || git checkout --orphan main
+          # 拷贝 seen.json
+          cp /home/zyzs/code/embedded-pm-daily/data/seen.json ./seen.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen.json
+          if git diff --cached --quiet; then
+            echo "seen.json 无变化,跳过 push"
+          else
+            git commit -m "chore: update seen.json $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            git push origin main
+            echo "✅ seen.json 已上传到 state repo"
+          fi
+          cd /home/zyzs/code/embedded-pm-daily
 
       # ====== 调试步骤:只在手动 Run workflow 时跑,日常 cron 不跑 ======
       - name: 调试 - DNS / 网络诊断(仅 debug)

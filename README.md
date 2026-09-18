@@ -57,8 +57,16 @@
    LLM_API_KEY          = sk-xxxxxxxx
    LLM_MODEL            = deepseek-chat
    ```
-3. 进入 `Actions` 标签,左边选 `Embedded PM Daily`,点 `Run workflow` 试一次
-4. 每天早上 8 点(UTC 0 点)自动跑
+3. **(可选但强烈推荐)跨 run 去重**:新建一个私有仓(比如 `embedded-pm-daily-state`),
+   用来存 `seen.json`。然后:
+   - 在 GitHub 创建 [Personal Access Token](https://github.com/settings/tokens),
+     scope 选 `repo`(只对**那个 state 仓**勾选 → Fine-grained token 更安全)
+   - 在主仓库 `Settings` → `Secrets and variables` → `Actions`:
+     - **Secrets** 加 `STATE_REPO_TOKEN` = 你的 PAT
+     - **Variables** 加 `STATE_REPO_OWNER` = state 仓的 owner 名(如 `chenyuxiangg`)
+     - **Variables** 加 `STATE_REPO_NAME` = state 仓名(如 `embedded-pm-daily-state`)
+4. 进入 `Actions` 标签,左边选 `Embedded PM Daily`,点 `Run workflow` 试一次
+5. 每天早上 8 点(UTC 0 点)自动跑
 
 ### 4.(可选)本地测试
 
